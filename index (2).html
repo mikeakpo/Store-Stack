@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StockStack – Storeroom Manager</title>
+<style>
+:root{--bg:#eef0ea;--ink:#20251c;--mute:#667060;--card:#fff;--line:#d3d9cb;--green:#2f6b3a;--amber:#ffb000;--amberbg:#fff3d1;--red:#c63a2f;--redbg:#fde6e3}
+@media (prefers-color-scheme:dark){:root{--bg:#161a14;--ink:#e9eee4;--mute:#9aa593;--card:#20261d;--line:#38422f;--green:#6fc27d;--amber:#ffbf2e;--amberbg:#3a2f10;--red:#ff7d70;--redbg:#3d1d19}}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);line-height:1.45}
+header,main{max-width:940px;margin:0 auto;padding:0 20px}
+header{padding-top:20px}
+h1{font-size:1.5rem;margin:0 0 4px}
+header p{margin:0;color:var(--mute);max-width:62ch}
+main{display:grid;gap:20px;grid-template-columns:minmax(0,320px) minmax(0,1fr);align-items:start;padding-top:16px;padding-bottom:40px}
+@media (max-width:760px){main{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+.panel h2{font-size:1rem;margin:0 0 12px}
+label{display:block;font-size:.9rem;margin-bottom:10px;color:var(--mute)}
+input{display:block;width:100%;margin-top:4px;padding:11px;border:1.5px solid var(--line);border-radius:10px;background:transparent;color:var(--ink);font:inherit;min-height:44px}
+button{font:inherit;cursor:pointer;min-height:46px;border-radius:10px;padding:10px 14px}
+.recv{width:100%;border:0;background:var(--green);color:#fff;font-weight:600}
+.issue{width:100%;border:1.5px solid var(--ink);background:transparent;color:var(--ink);font-weight:600;margin-top:10px}
+button:disabled{opacity:.4;cursor:not-allowed}
+button:focus-visible,input:focus-visible{outline:3px solid var(--amber);outline-offset:2px}
+.msg{margin-top:10px;font-size:.9rem;min-height:1.3em}
+.msg.err{color:var(--red)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
+.stats div{border:1px solid var(--line);border-radius:10px;padding:8px;text-align:center;font-size:.8rem;color:var(--mute)}
+.stats b{display:block;font-size:1.05rem;color:var(--ink)}
+.shelf{display:flex;flex-direction:column;gap:6px}
+.box{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px}
+.box.top{background:var(--amberbg);border-color:var(--amber)}
+.box.exp{background:var(--redbg);border-color:var(--red)}
+.box small{color:var(--mute)}
+.box .tag{grid-column:1/-1;font-size:.82rem;color:var(--red);font-weight:600}
+.slot{padding:10px 12px;border:1.5px dashed var(--line);border-radius:8px;color:var(--mute);font-size:.85rem}
+.log{margin:14px 0 0;padding:0;list-style:none;max-height:130px;overflow:auto;font-size:.88rem;color:var(--mute)}
+.log li{padding:3px 0;border-bottom:1px dashed var(--line)}
+.log li:first-child{color:var(--ink)}
+.reset{background:transparent;border:1px solid var(--line);color:var(--mute);margin-top:12px;min-height:40px}
+</style>
+</head>
+<body>
+<header>
+  <h1>StockStack: storeroom manager</h1>
+  <p>In a narrow storeroom where goods are stacked and only the top can be reached, stock works like a stack. New deliveries go on top, and the top is issued first. This app tracks that and warns you when older stock is getting buried.</p>
+</header>
+<main>
+  <section class="panel" aria-label="Receive and issue stock">
+    <h2>Receive stock (push)</h2>
+    <label>Item name<input id="name" placeholder="e.g. Rice 50kg bag" maxlength="40"></label>
+    <label>Quantity<input id="qty" type="number" min="1" value="10"></label>
+    <label>Expiry date<input id="exp" type="date"></label>
+    <button class="recv" id="push">Receive on top</button>
+    <button class="issue" id="pop">Issue top item (pop)</button>
+    <div class="msg" id="msg" role="status" aria-live="polite"></div>
+    <button class="reset" id="reset">Clear storeroom</button>
+  </section>
+  <section class="panel" aria-label="Storeroom stack">
+    <h2>Storeroom stack (top is reachable)</h2>
+    <div class="stats">
+      <div>peek()<b id="peek">-</b></div>
+      <div>size()<b id="size">0</b></div>
+      <div>isEmpty()<b id="empty">true</b></div>
+      <div>isFull()<b id="full">false</b></div>
+    </div>
+    <div class="shelf" id="shelf"></div>
+    <ul class="log" id="log"></ul>
+  </section>
+</main>
+<script>
+// ---- Stack with a fixed capacity (the storeroom has limited positions) ----
+class Stack {
+  constructor(cap){ this.cap = cap; this.items = []; }
+  push(x){ if(this.isFull()) throw new Error("overflow"); this.items.push(x); }
+  pop(){ if(this.isEmpty()) throw new Error("underflow"); return this.items.pop(); }
+  peek(){ return this.isEmpty() ? undefined : this.items[this.items.length - 1]; }
+  isEmpty(){ return this.items.length === 0; }
+  isFull(){ return this.items.length >= this.cap; }
+  size(){ return this.items.length; }
+  clear(){ this.items = []; }
+}
+
+const CAP = 8;
+const KEY = "stockstack-v1";
+const stack = new Stack(CAP);
+let logs = [];
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const today = () => { const d = new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
+
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify({items:stack.items, logs})); }catch(e){} }
+function load(){
+  try{
+    const d = JSON.parse(localStorage.getItem(KEY) || "null");
+    if(d && Array.isArray(d.items)){ stack.items = d.items.slice(0, CAP); logs = d.logs || []; }
+  }catch(e){}
+}
+function say(text, isErr){ const m = $("msg"); m.textContent = text; m.className = "msg" + (isErr ? " err" : ""); }
+function addLog(t){ logs.unshift(t); if(logs.length > 30) logs.pop(); }
+
+function receive(){
+  const name = $("name").value.trim();
+  const qty = parseInt($("qty").value, 10);
+  const exp = $("exp").value;
+  if(!name) return say("Enter the item name.", true);
+  if(!(qty > 0)) return say("Quantity must be at least 1.", true);
+  if(!exp) return say("Pick an expiry date.", true);
+  try{
+    stack.push({name, qty, exp});
+    addLog(`push: ${name} x${qty} (expires ${exp})`);
+    say(`${name} received on top.`);
+    $("name").value = "";
+  }catch(e){
+    say("Storeroom is full. Issue the top item before receiving more.", true);
+  }
+  render();
+}
+function issue(){
+  try{
+    const it = stack.pop();
+    const expired = it.exp < today();
+    addLog(`pop: ${it.name} x${it.qty} issued${expired ? " (EXPIRED, discard)" : ""}`);
+    say(expired ? `${it.name} is expired. Discard it, do not issue.` : `${it.name} x${it.qty} issued.`, expired);
+  }catch(e){
+    say("Storeroom is empty. Nothing to issue.", true);
+  }
+  render();
+}
+
+function render(){
+  const t = today();
+  const items = stack.items;
+  const rows = [];
+  for(let i = items.length - 1; i >= 0; i--){
+    const it = items[i];
+    const expired = it.exp < t;
+    // Buried risk: an item above it expires later, so this one stays trapped until after those are used.
+    const buried = items.slice(i + 1).some(o => o.exp > it.exp);
+    const tag = expired ? "Expired: remove it" : (buried ? "Buried: expires sooner than stock above it" : "");
+    rows.push(`<div class="box ${i===items.length-1?"top":""} ${expired?"exp":""}"><b>${esc(it.name)}</b><span>x${it.qty}</span><small>Expires ${esc(it.exp)}</small>${tag?`<span class="tag">${tag}</span>`:""}</div>`);
+  }
+  for(let i = items.length; i < CAP; i++) rows.push(`<div class="slot">Empty position</div>`);
+  $("shelf").innerHTML = rows.join("");
+  const p = stack.peek();
+  $("peek").textContent = p ? p.name : "-";
+  $("size").textContent = `${stack.size()}/${CAP}`;
+  $("empty").textContent = stack.isEmpty();
+  $("full").textContent = stack.isFull();
+  $("log").innerHTML = logs.map(l => `<li>${esc(l)}</li>`).join("");
+  $("pop").disabled = stack.isEmpty();
+  save();
+}
+
+$("push").addEventListener("click", receive);
+$("pop").addEventListener("click", issue);
+$("reset").addEventListener("click", () => { stack.clear(); logs = []; say("Storeroom cleared."); render(); });
+$("exp").min = today();
+load();
+render();
+</script>
+</body>
+</html>
